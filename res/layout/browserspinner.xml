@@ -6,14 +6,14 @@
     android:padding="6dp"
     >
 <ImageView
-    android:id="@+id/spinnerLogo"
+    android:id="@+id/image_logo"
     android:layout_width="wrap_content"
     android:layout_height="fill_parent"
     android:src="@drawable/ic_launcher"
     android:layout_marginRight="12dp"
     />
 <TextView
-    android:id="@+id/spinnerLabel"
+    android:id="@+id/text_label"
     android:layout_width="fill_parent"
     android:layout_height="fill_parent"
     android:gravity="fill_vertical|center_vertical|fill_horizontal|right"

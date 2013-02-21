@@ -27,22 +27,28 @@ import android.view.View.OnClickListener;
 import android.view.ViewGroup;
 
 import android.widget.Adapter;
+import android.widget.AdapterView;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.Spinner;
 import android.widget.SpinnerAdapter;
 import android.widget.TextView;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class BrowserBenchActivity extends Activity
 {
     private static final String LOGTAG = "BrowserBench";
+    private static final String START_URL = "http://people.mozilla.org/~jwillcox/browserbench/bench.html";
+    private static final String[] BENCHMARK_URLS = { "http://mozilla.org", "http://cnn.com", "http://engadget.com", "http://wikipedia.com" };
 
     private ActivityManager mActivityManager;
     private PackageManager mPackageManager;
     private LayoutInflater mInflater;
     private Spinner mSpinner;
+
+    private View mResultsList;
 
     private Thread mMonitorThread;
     private Handler mMonitorHandler;
@@ -52,6 +58,9 @@ public class BrowserBenchActivity extends Activity
 
     private Button mStartStopButton;
     private boolean mRunning;
+
+    private ResolveInfo mBrowserInfo;
+    private int mNumTabs;
 
     /** Called when the activity is first created. */
     @Override
@@ -64,15 +73,32 @@ public class BrowserBenchActivity extends Activity
         mPackageManager = getPackageManager();
         mInflater = (LayoutInflater)getSystemService(Activity.LAYOUT_INFLATER_SERVICE);
 
-        mSpinner = (Spinner)findViewById(R.id.browserSpinner);
-        populateBrowserSpinner();
+        mSpinner = (Spinner)findViewById(R.id.spinner_browser);
+        mSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
+                ResolveInfo info = (ResolveInfo)mSpinner.getItemAtPosition(pos);
+                if (!info.activityInfo.applicationInfo.packageName.equals(mBrowserInfo.activityInfo.applicationInfo.packageName)) {
+                    stop();
+                    mBrowserInfo = info;
+                }
+            }
 
-        mStartStopButton = (Button)findViewById(R.id.startStopButton);
+            public void onNothingSelected(AdapterView<?> parent) {
+
+            }
+        });
+
+        populateBrowserSpinner();
+        mBrowserInfo = (ResolveInfo)mSpinner.getSelectedItem();
+
+        mStartStopButton = (Button)findViewById(R.id.button_start_stop);
         mStartStopButton.setOnClickListener(new OnClickListener() {
             public void onClick(View v) {
                 startOrStop();
             }
         });
+
+        mResultsList = findViewById(R.id.container_results);
 
         mUIHandler = new Handler();
 
@@ -88,21 +114,53 @@ public class BrowserBenchActivity extends Activity
         mMonitorThread.start();
     }
 
+    public void onTabCountSelected(View view) {
+        switch (view.getId()) {
+            case R.id.radio_no_tabs:
+                mNumTabs = 0;
+                break;
+            case R.id.radio_one_tab:
+                mNumTabs = 1;
+                break;
+            case R.id.radio_many_tabs:
+                mNumTabs = BENCHMARK_URLS.length;
+                break;
+        }
+    }
+
     private void startOrStop() {
         if (mRunning) {
-            mRunning = false;
-            mStartStopButton.setText("Start");
-
-            if (mMonitorRunnable != null) {
-                mMonitorRunnable.stop();
-                mMonitorRunnable = null;
-            }
+            stop();
         } else {
-            mRunning = true;
-            mStartStopButton.setText("Stop");
-
-            launch("http://cnn.com");
+            start();
         }
+    }
+
+    private void start() {
+        if (mRunning)
+            return;
+
+        mRunning = true;
+        mStartStopButton.setText("Stop");
+
+        launch();
+
+        mResultsList.setVisibility(View.VISIBLE);
+    }
+
+    private void stop() {
+        if (!mRunning)
+            return;
+
+        mRunning = false;
+        mStartStopButton.setText("Start");
+
+        if (mMonitorRunnable != null) {
+            mMonitorRunnable.stop();
+            mMonitorRunnable = null;
+        }
+
+        mResultsList.setVisibility(View.GONE);
     }
 
     private void populateBrowserSpinner() {
@@ -111,39 +169,53 @@ public class BrowserBenchActivity extends Activity
         mSpinner.setAdapter(new BrowserSpinnerAdapter(result));
     }
 
-    private void launch(String url) {
-        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+    private void launch() {
+        Intent intent = new Intent(Intent.ACTION_VIEW);
 
-        ResolveInfo info = (ResolveInfo)mSpinner.getSelectedItem();
+        mActivityManager.killBackgroundProcesses(mBrowserInfo.activityInfo.applicationInfo.packageName);
 
-        Log.i(LOGTAG, "expect process name: " + info.activityInfo.applicationInfo.processName);
+        intent.setClassName(mBrowserInfo.activityInfo.packageName, mBrowserInfo.activityInfo.name);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
 
-        i.setClassName(info.activityInfo.packageName, info.activityInfo.name);
-        i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        startActivity(i);
-
-        mMonitorRunnable = new MemoryUsageRunnable(info.activityInfo.applicationInfo.processName);
+        mMonitorRunnable = new MemoryUsageRunnable(mBrowserInfo.activityInfo.applicationInfo.processName,
+                                                   mBrowserInfo.activityInfo.applicationInfo.packageName);
         mMonitorHandler.post(mMonitorRunnable);
+
+        Log.i(LOGTAG, "SNORP: launching with tabs: " + mNumTabs);
+        if (mNumTabs == 0) {
+            startActivity(intent);
+        } else {
+            for (int i = 0; i < mNumTabs; i++) {
+                intent.setData(Uri.parse(BENCHMARK_URLS[i]));
+                startActivity(intent);
+            }
+        }
+        
+    }
+
+    private String formatBytes(int kb) {
+        return (kb / 1024) + " MB";
     }
 
     private void updateUsageLabels(int min, int max, int current) {
-        ((TextView)findViewById(R.id.minUsageText)).setText(Integer.toString(min));
-        ((TextView)findViewById(R.id.maxUsageText)).setText(Integer.toString(max));
-        ((TextView)findViewById(R.id.currentUsageText)).setText(Integer.toString(current));
+        ((TextView)findViewById(R.id.text_min_usage)).setText(formatBytes(min));
+        ((TextView)findViewById(R.id.text_max_usage)).setText(formatBytes(max));
+        ((TextView)findViewById(R.id.text_current_usage)).setText(formatBytes(current));
     }
 
     private class MemoryUsageRunnable implements Runnable
     {
         private String mProcessName;
-        private ActivityManager.RunningAppProcessInfo mAppInfo;
+        private String mPackageName;
         private boolean mStopped;
 
         public int mMaxUsage;
         public int mMinUsage;
-        public int mLastUsage;
+        public int mLastTotal;
 
-        public MemoryUsageRunnable(String processName) {
+        public MemoryUsageRunnable(String processName, String packageName) {
             mProcessName = processName;
+            mPackageName = packageName;
         }
 
         public void stop() {
@@ -151,51 +223,50 @@ public class BrowserBenchActivity extends Activity
             mStopped = true;
         }
 
-        private ActivityManager.RunningAppProcessInfo waitForApp() {
-            for (;;) {
-                List<ActivityManager.RunningAppProcessInfo> procs = mActivityManager.getRunningAppProcesses();
-                for (ActivityManager.RunningAppProcessInfo procInfo : procs) {
-                    if (procInfo.processName.equals(mProcessName)) {
-                        return procInfo;
-                    }
-                }
+        private int[] findAppProcesses() {
+            ArrayList<Integer> pids = new ArrayList<Integer>();
 
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {}
+            List<ActivityManager.RunningAppProcessInfo> procs = mActivityManager.getRunningAppProcesses();
+            for (ActivityManager.RunningAppProcessInfo procInfo : procs) {
+                if (procInfo.processName.startsWith(mProcessName) || procInfo.processName.startsWith(mPackageName))
+                    pids.add(procInfo.pid);
             }
+
+            int[] result = new int[pids.size()];
+
+            // Good lord. Really?
+            for (int i = 0; i < pids.size(); i++) {
+                result[i] = pids.get(i);
+            }
+
+            return result;
         }
 
         public void run() {
             if (mStopped)
                 return;
 
-            if (mAppInfo == null)
-                mAppInfo = waitForApp();
+            int[] pids = findAppProcesses();
 
-            Log.i(LOGTAG, "polling pid " + mAppInfo.pid);
-            int[] pids = new int[1];
-            pids[0] = mAppInfo.pid;
-
+            Log.i(LOGTAG, "SNORP: found " + pids.length + " processes for " + mPackageName);
             MemoryInfo[] infos = mActivityManager.getProcessMemoryInfo(pids);
 
-            if (infos.length == 0) {
-                stop();
-                return;
+            int currentTotal = 0;
+
+            for (MemoryInfo info : infos) {
+                currentTotal += info.getTotalPss();
             }
 
-            int current = infos[0].getTotalPrivateDirty();
-            if (mMinUsage == 0 || current < mMinUsage)
-                mMinUsage = current;
-            if (mMaxUsage == 0 || current > mMaxUsage)
-                mMaxUsage = current;
+            if (mMinUsage == 0 || currentTotal < mMinUsage)
+                mMinUsage = currentTotal;
+            if (mMaxUsage == 0 || currentTotal > mMaxUsage)
+                mMaxUsage = currentTotal;
 
-            mLastUsage = current;
-
+            mLastTotal = currentTotal;
 
             mUIHandler.post(new Runnable() {
                 public void run() {
-                    updateUsageLabels(mMinUsage, mMaxUsage, mLastUsage);
+                    updateUsageLabels(mMinUsage, mMaxUsage, mLastTotal);
                 }
             });
 
@@ -260,8 +331,8 @@ public class BrowserBenchActivity extends Activity
             if (info == null)
                 return;
 
-            ((ImageView)view.findViewById(R.id.spinnerLogo)).setImageDrawable(info.loadIcon(mPackageManager));
-            ((TextView)view.findViewById(R.id.spinnerLabel)).setText(info.loadLabel(mPackageManager));
+            ((ImageView)view.findViewById(R.id.image_logo)).setImageDrawable(info.loadIcon(mPackageManager));
+            ((TextView)view.findViewById(R.id.text_label)).setText(info.loadLabel(mPackageManager));
         }
 
         public View getView(int position, View convertView, ViewGroup parent) {
